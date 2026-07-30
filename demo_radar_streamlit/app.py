@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import linear_kernel
 
 
 st.set_page_config(page_title="Radar cyber France", page_icon="◉", layout="wide")
@@ -18,6 +20,19 @@ def clean_text(value: object) -> str:
     return str(value).replace("Ã©", "é").replace("Ã¨", "è").replace("Ãª", "ê").replace("Ã ", "à").replace("â€™", "’").replace("â€œ", "“").replace("â€", "”")
 
 
+@st.cache_data
+def find_relevant_signals(question: str, corpus: pd.DataFrame) -> pd.DataFrame:
+    """Recherche des extraits du corpus, sans appel Ã  un service externe."""
+    columns = ["organisation_concernee", "categorie", "resume_neutre", "theme", "sous_theme", "passage_justificatif"]
+    documents = corpus[columns].fillna("").agg(" ".join, axis=1)
+    vectorizer = TfidfVectorizer(lowercase=True, ngram_range=(1, 2))
+    matrix = vectorizer.fit_transform(documents)
+    scores = linear_kernel(vectorizer.transform([question]), matrix).flatten()
+    results = corpus.copy()
+    results["score_pertinence"] = scores
+    return results[results["score_pertinence"] > 0].sort_values("score_pertinence", ascending=False).head(5)
+
+
 entities = load_csv("entites_publiques.csv")
 signals = load_csv("signaux_publics.csv")
 services = load_csv("services_publics.csv")
@@ -29,6 +44,21 @@ for frame in (entities, signals, services, relations):
 
 st.title("Radar stratégique cyber France")
 st.caption("Prototype de démonstration — corpus public, à valider")
+
+with st.expander("Poser une question au corpus", expanded=True):
+    st.write("Formulez votre question naturellement. L'application affiche seulement les extraits pertinents du corpus : aucune information n'est inventÃ©e et aucune donnÃ©e n'est envoyÃ©e Ã  un service externe.")
+    question = st.text_input("Exemple : quels acteurs proposent des services SOC ou MDR pour les MSP ?", key="question")
+    if question:
+        matches = find_relevant_signals(question, signals)
+        if matches.empty:
+            st.info("Aucun passage suffisamment proche n'a Ã©tÃ© trouvÃ©. Essayez avec le nom d'un acteur ou des mots plus simples.")
+        else:
+            st.success(f"{len(matches)} passages pertinents trouvÃ©s dans le corpus")
+            for _, item in matches.iterrows():
+                st.markdown(f"**{item['organisation_concernee']} â€” {item['categorie']}**")
+                st.write(item["resume_neutre"])
+                st.caption(f"RÃ©fÃ©rence : {item['id_signal']} Â· {item['id_source_exacte']} Â· confiance : {item['niveau_confiance']}")
+
 
 with st.sidebar:
     st.header("Explorer le corpus")
